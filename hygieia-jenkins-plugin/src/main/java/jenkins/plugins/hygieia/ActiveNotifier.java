@@ -1,24 +1,31 @@
 package jenkins.plugins.hygieia;
 
+import com.capitalone.dashboard.model.BuildStatus;
+import com.capitalone.dashboard.model.RepoBranch;
 import com.capitalone.dashboard.model.SCM;
 import com.capitalone.dashboard.request.BinaryArtifactCreateRequest;
 import com.capitalone.dashboard.request.BuildDataCreateRequest;
 import com.capitalone.dashboard.request.CodeQualityCreateRequest;
 import com.capitalone.dashboard.request.DeployDataCreateRequest;
 import com.capitalone.dashboard.request.TestDataCreateRequest;
-import hudson.EnvVars;
+import hudson.FilePath;
 import hudson.model.AbstractBuild;
 import hudson.model.BuildListener;
-import hygieia.builder.ArtifactBuilder;
-import hygieia.builder.CommitBuilder;
-import hygieia.builder.CucumberTestBuilder;
-import hygieia.builder.DeployBuilder;
-import hygieia.builder.SonarBuilder;
+import hudson.model.Run;
+import hudson.model.TaskListener;
+import hudson.plugins.git.GitSCM;
+import hudson.scm.SubversionSCM;
+import hygieia.builder.*;
+import hygieia.utils.HygieiaUtils;
+
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.httpclient.HttpStatus;
+import org.jenkinsci.plugins.multiplescms.MultiSCM;
 import org.json.simple.parser.ParseException;
 
 import java.io.IOException;
 import java.net.URISyntaxException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.logging.Logger;
@@ -50,7 +57,8 @@ public class ActiveNotifier implements FineGrainedNotifier {
 
 
         if (publish) {
-            HygieiaResponse response = getHygieiaService(r).publishBuildData(getBuildData(r, false));
+            BuildBuilder builder = new BuildBuilder(r, publisher.getDescriptor().getHygieiaJenkinsName(), listener, false, true);
+            HygieiaResponse response = getHygieiaService(r).publishBuildData(builder.getBuildData());
             if (response.getResponseCode() == HttpStatus.SC_CREATED) {
                 listener.getLogger().println("Hygieia: Published Build Complete Data. " + response.toString());
             } else {
@@ -73,7 +81,8 @@ public class ActiveNotifier implements FineGrainedNotifier {
                 (publisher.getHygieiaBuild() != null) || (publisher.getHygieiaTest() != null) || (publisher.getHygieiaDeploy() != null);
 
         if (publishBuild) {
-            HygieiaResponse buildResponse = getHygieiaService(r).publishBuildData(getBuildData(r, true));
+            BuildBuilder builder = new BuildBuilder(r, publisher.getDescriptor().getHygieiaJenkinsName(), listener, true, true);
+            HygieiaResponse buildResponse = getHygieiaService(r).publishBuildData(builder.getBuildData());
             if (buildResponse.getResponseCode() == HttpStatus.SC_CREATED) {
                 listener.getLogger().println("Hygieia: Published Build Complete Data. " + buildResponse.toString());
             } else {
@@ -85,8 +94,8 @@ public class ActiveNotifier implements FineGrainedNotifier {
             boolean publishArt = (publisher.getHygieiaArtifact() != null) && successBuild;
 
             if (publishArt) {
-                ArtifactBuilder builder = new ArtifactBuilder(r, publisher, listener, buildResponse.getResponseValue());
-                Set<BinaryArtifactCreateRequest> requests = builder.getArtifacts();
+                ArtifactBuilder artifactBuilder = new ArtifactBuilder(r, publisher, listener, buildResponse.getResponseValue());
+                Set<BinaryArtifactCreateRequest> requests = artifactBuilder.getArtifacts();
                 for (BinaryArtifactCreateRequest bac : requests) {
                     HygieiaResponse artifactResponse = getHygieiaService(r).publishArtifactData(bac);
                     if (artifactResponse.getResponseCode() == HttpStatus.SC_CREATED) {
@@ -103,8 +112,12 @@ public class ActiveNotifier implements FineGrainedNotifier {
             boolean publishTest = (publisher.getHygieiaTest() != null) && (successBuild || publisher.getHygieiaTest().isPublishEvenBuildFails());
 
             if (publishTest) {
-                CucumberTestBuilder builder = new CucumberTestBuilder(r, publisher, listener, buildResponse.getResponseValue());
-                TestDataCreateRequest request = builder.getTestDataCreateRequest();
+//                CucumberTestBuilder(Run run, TaskListener listener, BuildStatus buildStatus, FilePath filePath, String applicationName, String environmentName, String testType, String filePattern, String directory, String jenkinsName, String buildId)
+                BuildStatus buildStatus = BuildStatus.fromString(r.getResult().toString());
+                CucumberTestBuilder cucumberTestBuilder = new CucumberTestBuilder(r, listener, buildStatus, r.getWorkspace(), publisher.getHygieiaTest().getTestApplicationName(),
+                        publisher.getHygieiaTest().getTestEnvironmentName(), publisher.getHygieiaTest().getTestType(), publisher.getHygieiaTest().getTestFileNamePattern(), publisher.getHygieiaTest().getTestResultsDirectory(),
+                        publisher.getDescriptor().getHygieiaJenkinsName(), buildResponse.getResponseValue());
+                TestDataCreateRequest request = cucumberTestBuilder.getTestDataCreateRequest();
                 if (request != null) {
                     HygieiaResponse testResponse = getHygieiaService(r).publishTestResults(request);
                     if (testResponse.getResponseCode() == HttpStatus.SC_CREATED) {
@@ -121,8 +134,9 @@ public class ActiveNotifier implements FineGrainedNotifier {
 
             if (publishSonar) {
                 try {
-                    SonarBuilder builder = new SonarBuilder(r, publisher, listener, buildResponse.getResponseValue());
-                    CodeQualityCreateRequest request = builder.getSonarMetrics();
+                    SonarBuilder sonarBuilder = new SonarBuilder(r, listener, publisher.getDescriptor().getHygieiaJenkinsName(), publisher.getHygieiaSonar().getCeQueryIntervalInSeconds(),
+                            publisher.getHygieiaSonar().getCeQueryMaxAttempts(), buildResponse.getResponseValue(), publisher.getDescriptor().isUseProxy());
+                    CodeQualityCreateRequest request = sonarBuilder.getSonarMetrics();
                     if (request != null) {
                         HygieiaResponse sonarResponse = getHygieiaService(r).publishSonarResults(request);
                         if (sonarResponse.getResponseCode() == HttpStatus.SC_CREATED) {
@@ -141,12 +155,12 @@ public class ActiveNotifier implements FineGrainedNotifier {
 
             boolean publishDeploy = (publisher.getHygieiaDeploy() != null) && successBuild;
             if (publishDeploy) {
-                DeployBuilder builder = new DeployBuilder(r, publisher, listener, buildResponse.getResponseValue());
-                Set<DeployDataCreateRequest> requests = builder.getDeploys();
+                DeployBuilder deployBuilder = new DeployBuilder(r, publisher, listener, buildResponse.getResponseValue());
+                Set<DeployDataCreateRequest> requests = deployBuilder.getDeploys();
                 for (DeployDataCreateRequest bac : requests) {
                     HygieiaResponse deployResponse = getHygieiaService(r).publishDeployData(bac);
                     if (deployResponse.getResponseCode() == HttpStatus.SC_CREATED) {
-                        listener.getLogger().println("Hygieia: Published Deploy Data: " +  deployResponse.toString());
+                        listener.getLogger().println("Hygieia: Published Deploy Data: " + deployResponse.toString());
                     } else {
                         listener.getLogger().println("Hygieia: Failed Publishing Deploy Data:" + deployResponse.toString());
                     }
@@ -154,44 +168,4 @@ public class ActiveNotifier implements FineGrainedNotifier {
             }
         }
     }
-
-    private BuildDataCreateRequest getBuildData(AbstractBuild r, boolean isComplete) {
-        BuildDataCreateRequest request = new BuildDataCreateRequest();
-        request.setNiceName(publisher.getDescriptor().getHygieiaJenkinsName());
-        request.setJobName(r.getProject().getName());
-        request.setBuildUrl(r.getProject().getAbsoluteUrl() + String.valueOf(r.getNumber()) + "/");
-        request.setJobUrl(r.getProject().getAbsoluteUrl());
-
-        EnvVars env = null;
-        try {
-            env = r.getEnvironment(listener);
-        } catch (IOException | InterruptedException e) {
-            logger.warning("Error getting environment variables");
-        }
-        if (env != null) {
-            request.setInstanceUrl(env.get("JENKINS_URL"));
-        } else {
-            String jobPath = "/job" + "/" + r.getProject().getName() + "/";
-            int ind = r.getProject().getAbsoluteUrl().indexOf(jobPath);
-            request.setInstanceUrl(r.getProject().getAbsoluteUrl().substring(0, ind));
-        }
-        request.setNumber(String.valueOf(r.getNumber()));
-        request.setStartTime(r.getStartTimeInMillis());
-        request.setSourceChangeSet(getCommitList(r));
-
-        if (isComplete) {
-            request.setBuildStatus(r.getResult().toString());
-            request.setDuration(r.getDuration());
-            request.setEndTime(r.getStartTimeInMillis() + r.getDuration());
-        } else {
-            request.setBuildStatus("InProgress");
-        }
-        return request;
-    }
-
-    private List<SCM> getCommitList(AbstractBuild r) {
-        CommitBuilder commitBuilder = new CommitBuilder(r);
-        return commitBuilder.getCommits();
-    }
-
 }

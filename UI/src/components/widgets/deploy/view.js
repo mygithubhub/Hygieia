@@ -13,6 +13,10 @@
         // public variables
         ctrl.environments = [];
         ctrl.statuses = DashStatus;
+        ctrl.ignoreEnvironmentFailuresRegex=/^$/;
+        if ($scope.widgetConfig.options.ignoreRegex !== undefined && $scope.widgetConfig.options.ignoreRegex !== null && $scope.widgetConfig.options.ignoreRegex !== '') {
+            ctrl.ignoreEnvironmentFailuresRegex=new RegExp($scope.widgetConfig.options.ignoreRegex.replace(/^"(.*)"$/, '$1'));
+        }
 
         ctrl.load = load;
         ctrl.showDetail = showDetail;
@@ -38,6 +42,9 @@
                     },
                     collectorName: function () {
                         return $scope.dashboard.application.components[0].collectorItems.Deployment[0].collector.name;
+                    },
+                    collectorNiceName: function () {
+                        return $scope.dashboard.application.components[0].collectorItems.Deployment[0].niceName;
                     }
                 }
             });
@@ -48,13 +55,20 @@
                 getEnvironments: getEnvironments,
                 getIsDefaultState: getIsDefaultState
             };
+            
+            var ignoreEnvironmentFailuresRegex = ctrl.ignoreEnvironmentFailuresRegex;
+            
+            function ignoreEnvironmentFailures(environment) {
+            	return ignoreEnvironmentFailuresRegex.test(environment.name);
+            }
 
             function getIsDefaultState(data, cb) {
                 var isDefaultState = true;
                 _(data).forEach(function (environment) {
                     var offlineUnits = _(environment.units).where({'deployed': false}).value().length;
 
-                    if(environment.units && environment.units.length == offlineUnits) {
+                    if(environment.units && environment.units.length == offlineUnits
+                    		&& !ignoreEnvironmentFailures(environment)) {
                         isDefaultState = false;
                     }
                 });
@@ -72,6 +86,7 @@
                         serverUpCount: getServerOnlineCount(item.units, true),
                         serverDownCount: getServerOnlineCount(item.units, false),
                         failedComponents: getFailedComponentCount(item.units),
+                        ignoreFailure: ignoreEnvironmentFailures(item),
                         lastUpdated: getLatestUpdate(item.units)
                     };
 

@@ -12,8 +12,15 @@ public class CommitBuilder {
     private static final Logger logger = Logger.getLogger(CommitBuilder.class.getName());
     private List<SCM> commitList = new LinkedList<>();
 
-    public CommitBuilder(AbstractBuild build) {
-        buildCommits(build.getChangeSet());
+
+    public CommitBuilder(ChangeLogSet changeLogSet) {
+        buildCommits(changeLogSet);
+    }
+
+    public CommitBuilder(List<ChangeLogSet<? extends ChangeLogSet.Entry>> changeLogSets) {
+        if (changeLogSets != null) {
+            buildCommits(changeLogSets);
+        }
     }
 
 
@@ -21,6 +28,7 @@ public class CommitBuilder {
         for (Object o : changeLogSet.getItems()) {
             ChangeLogSet.Entry entry = (ChangeLogSet.Entry) o;
             SCM commit = new SCM();
+
             if (entry.getAffectedFiles() != null) {
                 commit.setNumberOfChanges(entry.getAffectedFiles().size());
             } else {
@@ -35,6 +43,7 @@ public class CommitBuilder {
             commit.setScmCommitTimestamp(entry.getTimestamp()); //Timestamp will be -1 mostly per Jenkins documentation - as commits span over time.
             commit.setScmRevisionNumber(entry.getCommitId());
             if (isNewCommit(commit)) {
+                logger.info("Adding commit:" + commit.getScmUrl()+":"+commit.getScmBranch()+":"+commit.getScmRevisionNumber()+":"+commit.getScmCommitLog());
                 commitList.add(commit);
             }
             if ((entry.getParent() != null) && (!changeLogSet.equals(entry.getParent()))) {
@@ -42,6 +51,14 @@ public class CommitBuilder {
             }
         }
     }
+
+
+    private void buildCommits(List<ChangeLogSet<? extends ChangeLogSet.Entry>> changeLogSets) {
+        for (ChangeLogSet changeLogSet : changeLogSets) {
+            buildCommits(changeLogSet);
+        }
+    }
+
 
     private boolean isNewCommit(SCM commit) {
         for (SCM c : commitList) {

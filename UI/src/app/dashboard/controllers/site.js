@@ -29,10 +29,12 @@
         ctrl.setType = setType;
         ctrl.filterNotOwnedList = filterNotOwnedList;
         ctrl.filterDashboards = filterDashboards;
+        ctrl.renameDashboard = renameDashboard;
 
-        if (ctrl.username === 'admin') {
+         if (ctrl.username === 'admin') {
             ctrl.myadmin = true;
         }
+        checkPassThrough();
 
         (function() {
             // set up the different types of dashboards with a custom icon
@@ -69,6 +71,14 @@
             return matchesSearch;
         }
 
+        function checkPassThrough(){
+            if(angular.isUndefined(ctrl.username) || angular.isUndefined(ctrl.showAuthentication) || ctrl.showAuthentication == false){
+                console.log('Authentication failed, redirecting to login page');
+                $location.path('/login');
+            }
+
+        }
+
         function admin() {
             console.log('sending to admin page');
             $location.path('/admin');
@@ -91,6 +101,26 @@
             });
         }
 
+        function renameDashboard(item)
+        {
+            console.log("Rename Dashboard");
+            // open modal for renaming dashboard
+            $modal.open({
+                templateUrl: 'app/dashboard/views/renameDashboard.html',
+                controller: 'RenameDashboardController',
+                controllerAs: 'ctrl',
+                resolve: {
+                    dashboardId: function() {
+                        return item.id;
+                    },
+                    dashboardName: function() {
+                        return item.name;
+                    }
+                }
+            });
+        }
+
+
         function open(dashboardId) {
             $location.path('/dashboard/' + dashboardId);
         }
@@ -107,7 +137,7 @@
                 };
 
                 if(board.isProduct) {
-                    console.log(board);
+                    //console.log(board);
                 }
                 dashboards.push(board);
             }
@@ -140,6 +170,8 @@
         function processMyDashboardError(data) {
             ctrl.mydash = [];
         }
+
+
 
 
         function deleteDashboard(item) {
